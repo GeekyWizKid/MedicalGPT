@@ -297,8 +297,15 @@ def main():
 
     print_trainable_parameters(model)
     # Load reward model
-    default_device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.backends.mps.is_available():
+        default_device = "mps"
+    elif torch.cuda.is_available():
+        default_device = "cuda"
+    else:
+        default_device = "cpu"
+    print(f"Default device: {default_device} for reward model")
     device = args.reward_model_device if args.reward_model_device is not None else default_device
+    print(f"Using device: {device} for reward model")
     reward_config = config_class.from_pretrained(
         args.reward_model_name_or_path,
         torch_dtype=torch_dtype,
@@ -474,6 +481,8 @@ def main():
         dataset=train_dataset,
         data_collator=collator,
     )
+    trainer.current_device = device  # 设置 trainer 的设备
+
 
     # These arguments are passed to the `generate` function of the PPOTrainer
     generation_kwargs = {
@@ -496,8 +505,11 @@ def main():
             responses = []
             response_tensors = []
             for q_tensor in question_tensors:
+                # 生成 attention_mask
+                attention_mask = torch.ones(q_tensor.shape, device=device)
                 response_tensor = trainer.generate(
-                    q_tensor,
+                    query_tensor=q_tensor,  # 确保传递 query_tensor 参数
+                    attention_mask=attention_mask.unsqueeze(0),  # 添加 attention_mask
                     return_prompt=False,
                     **generation_kwargs,
                 )
@@ -515,6 +527,11 @@ def main():
 
             # Run PPO step
             try:
+                # 确保所有张量都在正确的设备上
+                question_tensors = [tensor.to(device) for tensor in question_tensors]
+                response_tensors = [tensor.to(device) for tensor in response_tensors]
+                rewards = [tensor.to(device) for tensor in rewards]
+
                 stats = trainer.step(question_tensors, response_tensors, rewards)
                 trainer.log_stats(stats, batch, rewards)
                 logger.debug(f"Step {step}/{total_steps}: reward score:{score_outputs}")

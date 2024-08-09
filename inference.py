@@ -35,6 +35,7 @@ MODEL_CLASSES = {
 
 
 @torch.inference_mode()
+@torch.inference_mode()
 def stream_generate_answer(
         model,
         tokenizer,
@@ -43,17 +44,23 @@ def stream_generate_answer(
         do_print=True,
         max_new_tokens=512,
         temperature=0.7,
+        top_p=0.9,
         repetition_penalty=1.0,
         context_len=2048,
         stop_str="</s>",
 ):
     """Generate answer from prompt with GPT and stream the output"""
     streamer = TextIteratorStreamer(tokenizer, timeout=60.0, skip_prompt=True, skip_special_tokens=True)
-    input_ids = tokenizer(prompt).input_ids
+    inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)
+    input_ids = inputs["input_ids"].to(device)
+    attention_mask = inputs["attention_mask"].to(device)
     max_src_len = context_len - max_new_tokens - 8
-    input_ids = input_ids[-max_src_len:]
+    input_ids = input_ids[:, -max_src_len:]
+    attention_mask = attention_mask[:, -max_src_len:]
+
     generation_kwargs = dict(
-        input_ids=torch.as_tensor([input_ids]).to(device),
+        input_ids=input_ids,
+        attention_mask=attention_mask,
         max_new_tokens=max_new_tokens,
         temperature=temperature,
         do_sample=True if temperature > 0.0 else False,
@@ -105,7 +112,8 @@ def batch_generate_answer(
     prompts = [prompt_template.get_prompt(messages=messages, system_prompt=system_prompt)]
     inputs_tokens = tokenizer(prompts, return_tensors="pt", padding=True)
     input_ids = inputs_tokens['input_ids'].to(device)
-    outputs = model.generate(input_ids=input_ids, **generation_kwargs)
+    attention_mask = inputs_tokens['attention_mask'].to(device)  # 新增 attention_mask
+    outputs = model.generate(input_ids=input_ids, attention_mask=attention_mask,**generation_kwargs)
     for gen_sequence in outputs:
         prompt_len = len(input_ids[0])
         gen_sequence = gen_sequence[prompt_len:]
@@ -184,7 +192,7 @@ def main():
     print(tokenizer)
     # test data
     if args.data_file is None:
-        examples = ["介绍下北京", "乙肝和丙肝的区别？"]
+        examples = ["失眠怎么办？"]
     else:
         with open(args.data_file, 'r') as f:
             examples = [l.strip() for l in f.readlines()]
